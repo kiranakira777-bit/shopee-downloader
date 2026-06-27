@@ -96,7 +96,7 @@ export function buildImageUrl(imageHash: string, size = "_tn"): string {
   // If already a full URL, return as-is
   if (imageHash.startsWith("http")) return imageHash;
 
-  return `https://cf.shopee.co.id/file/${imageHash}`;
+  return `https://down-id.img.susercontent.com/file/${imageHash}`;
 }
 
 export function buildFullImageUrl(imageHash: string): string {
