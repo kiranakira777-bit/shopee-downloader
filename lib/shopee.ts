@@ -52,7 +52,10 @@ function buildHeaders(shopId: string, itemId: string) {
 function parseApiResponse(json: ShopeeApiResponse, shopId: string, itemId: string): ShopeeProduct | null {
   const data = json.data;
   if (!data) return null;
-  const images = (data.images || []).filter(Boolean).map((h: string) => buildFullImageUrl(h));
+  const images = (data.images || []).filter(Boolean).map((h: string) => {
+  if (h.startsWith("http")) return h;
+  return `https://down-id.img.susercontent.com/file/${h}`;
+});
   if (images.length === 0) return null;
   const currency = "IDR";
   const price = data.price
