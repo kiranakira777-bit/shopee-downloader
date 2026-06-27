@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ShoppingBag, Github, Zap, ChevronDown, ChevronUp, Key } from "lucide-react";
+import { ShoppingBag, Github, Zap, BookMarked, Copy, Check, ChevronDown, ChevronUp, Key } from "lucide-react";
 import UrlInput from "@/components/UrlInput";
 import ProductGallery from "@/components/ProductGallery";
 import { SkeletonGallery } from "@/components/Loading";
@@ -14,6 +14,37 @@ interface ProductData {
   sold?: number;
 }
 
+// Bookmarklet code — runs on Shopee page, extracts image data
+const BOOKMARKLET_CODE = `javascript:(function(){
+  var d=window.__INITIAL_STATE__;
+  var item=null;
+  try{item=d.pdpReducer.product||d.itemDetail.item||null;}catch(e){}
+  if(!item){
+    var scripts=document.querySelectorAll('script');
+    for(var i=0;i<scripts.length;i++){
+      var t=scripts[i].textContent;
+      if(t&&t.includes('"images"')&&t.includes('"name"')){
+        var m=t.match(/"name":"([^"]{5,}?)","description"/);
+        var imgs=[];
+        var re=/["']([a-f0-9]{32})["']/g,match;
+        while((match=re.exec(t))!==null)imgs.push(match[1]);
+        if(imgs.length>0){item={name:m?m[1]:"Produk Shopee",images:imgs,price:0};}
+        break;
+      }
+    }
+  }
+  if(!item||!item.images||!item.images.length){
+    alert("Tidak bisa ekstrak data. Coba refresh halaman Shopee dulu.");
+    return;
+  }
+  var base="https://down-id.img.susercontent.com/file/";
+  var imgs=item.images.map(function(h){return h.startsWith("http")?h:base+h;});
+  var price=item.price?new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(item.price/100000):"Lihat di Shopee";
+  var data={title:item.name||"Produk Shopee",price:price,images:imgs};
+  var url="https://shopee-downloader-six.vercel.app/extract?data="+encodeURIComponent(JSON.stringify(data));
+  window.open(url,"_blank");
+})();`;
+
 export default function HomePage() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -21,6 +52,8 @@ export default function HomePage() {
   const [cookie, setCookie] = useState("");
   const [showCookie, setShowCookie] = useState(false);
   const [needCookie, setNeedCookie] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [showBookmarklet, setShowBookmarklet] = useState(false);
 
   const handleSubmit = async (url: string) => {
     setIsLoading(true);
@@ -34,23 +67,23 @@ export default function HomePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url, cookie: cookie || undefined }),
       });
-
       const data = await response.json();
-
       if (!response.ok || !data.success) {
-        if (data.needCookie) {
-          setNeedCookie(true);
-          setShowCookie(true);
-        }
+        if (data.needCookie) { setNeedCookie(true); setShowBookmarklet(true); }
         throw new Error(data.error || "Terjadi kesalahan.");
       }
-
       setProduct({ title: data.title, price: data.price, images: data.images, rating: data.rating, sold: data.sold });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Terjadi kesalahan.");
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleCopyBookmarklet = async () => {
+    await navigator.clipboard.writeText(BOOKMARKLET_CODE);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   return (
@@ -83,8 +116,65 @@ export default function HomePage() {
               Download Foto Produk <span className="text-orange-400">Shopee</span>
             </h2>
             <p className="text-zinc-400 text-sm sm:text-base max-w-xl mx-auto">
-              Tempel link produk Shopee, ambil semua foto produk, dan unduh sekaligus dalam satu file ZIP.
+              Gunakan bookmarklet untuk mengambil semua foto produk langsung dari halaman Shopee.
             </p>
+          </div>
+        )}
+
+        {/* Bookmarklet — cara utama */}
+        {!product && !isLoading && (
+          <div className="max-w-2xl mx-auto">
+            <div className="rounded-2xl bg-zinc-900 border border-orange-500/20 p-5 space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="flex items-center justify-center h-10 w-10 rounded-xl bg-orange-500/10 shrink-0">
+                  <BookMarked className="h-5 w-5 text-orange-400" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-zinc-100 text-sm">Cara Terbaik: Bookmarklet</h3>
+                  <p className="text-zinc-500 text-xs">Klik sekali di halaman Shopee → semua foto langsung muncul</p>
+                </div>
+              </div>
+
+              <div className="space-y-3 text-sm text-zinc-400">
+                <div className="flex gap-3">
+                  <span className="flex-shrink-0 flex items-center justify-center h-6 w-6 rounded-full bg-orange-500/20 text-orange-400 text-xs font-bold">1</span>
+                  <span>Klik tombol <strong className="text-zinc-300">Salin Kode Bookmarklet</strong> di bawah</span>
+                </div>
+                <div className="flex gap-3">
+                  <span className="flex-shrink-0 flex items-center justify-center h-6 w-6 rounded-full bg-orange-500/20 text-orange-400 text-xs font-bold">2</span>
+                  <span>Buka <strong className="text-zinc-300">Bookmark Manager</strong> browser kamu (Ctrl+Shift+O)</span>
+                </div>
+                <div className="flex gap-3">
+                  <span className="flex-shrink-0 flex items-center justify-center h-6 w-6 rounded-full bg-orange-500/20 text-orange-400 text-xs font-bold">3</span>
+                  <span>Buat bookmark baru → nama: <strong className="text-zinc-300">Shopee DL</strong> → paste kode di kolom URL</span>
+                </div>
+                <div className="flex gap-3">
+                  <span className="flex-shrink-0 flex items-center justify-center h-6 w-6 rounded-full bg-orange-500/20 text-orange-400 text-xs font-bold">4</span>
+                  <span>Buka halaman produk Shopee → klik bookmark <strong className="text-zinc-300">Shopee DL</strong></span>
+                </div>
+              </div>
+
+              <button
+                onClick={handleCopyBookmarklet}
+                className={`w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-medium text-sm transition-all ${
+                  copied
+                    ? "bg-green-500/20 border border-green-500/30 text-green-400"
+                    : "bg-orange-500 hover:bg-orange-400 text-white"
+                }`}
+              >
+                {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                {copied ? "Kode berhasil disalin!" : "Salin Kode Bookmarklet"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Divider */}
+        {!product && !isLoading && (
+          <div className="max-w-2xl mx-auto flex items-center gap-4">
+            <div className="flex-1 h-px bg-zinc-800" />
+            <span className="text-zinc-600 text-xs">atau coba dengan URL langsung</span>
+            <div className="flex-1 h-px bg-zinc-800" />
           </div>
         )}
 
@@ -92,17 +182,17 @@ export default function HomePage() {
           <UrlInput onSubmit={handleSubmit} isLoading={isLoading} error={error} />
 
           {/* Cookie input */}
-          <div className={`max-w-2xl ${product || isLoading ? "mx-0" : "mx-auto"}`}>
+          <div>
             <button
               onClick={() => setShowCookie(!showCookie)}
               className={`flex items-center gap-2 text-xs px-3 py-2 rounded-lg transition-colors ${
                 needCookie
                   ? "text-orange-400 bg-orange-500/10 border border-orange-500/30 w-full justify-center"
-                  : "text-zinc-500 hover:text-zinc-400"
+                  : "text-zinc-600 hover:text-zinc-400"
               }`}
             >
               <Key className="h-3 w-3" />
-              {needCookie ? "⚠️ Cookie Shopee diperlukan — klik untuk input" : "Input Cookie Shopee (opsional)"}
+              {needCookie ? "⚠️ Cookie diperlukan untuk semua foto" : "Input Cookie (opsional)"}
               {showCookie ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
             </button>
 
@@ -111,40 +201,31 @@ export default function HomePage() {
                 <textarea
                   value={cookie}
                   onChange={(e) => setCookie(e.target.value)}
-                  placeholder="Paste cookie dari browser Shopee kamu di sini..."
+                  placeholder="Paste cookie dari browser Shopee kamu..."
                   rows={3}
                   className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-4 py-3 text-xs text-zinc-300 placeholder-zinc-600 outline-none focus:border-orange-500/50 font-mono resize-none"
                 />
-                <div className="text-xs text-zinc-600 space-y-1">
-                  <p className="text-zinc-500 font-medium">Cara ambil cookie:</p>
-                  <p>1. Buka shopee.co.id → Login → tekan F12</p>
-                  <p>2. Tab Network → refresh halaman → klik request shopee.co.id</p>
-                  <p>3. Headers → Request Headers → copy nilai <code className="text-orange-400">Cookie:</code></p>
-                  <p>4. Paste di kolom di atas</p>
-                </div>
               </div>
             )}
           </div>
         </div>
 
-        {isLoading && <SkeletonGallery />}
-        {product && !isLoading && <ProductGallery product={product} />}
-
-        {!product && !isLoading && !error && (
-          <div className="max-w-2xl mx-auto grid grid-cols-1 sm:grid-cols-3 gap-4 pt-4">
-            {[
-              { icon: "📦", title: "Semua format URL", desc: "Mendukung link pendek maupun link lengkap Shopee." },
-              { icon: "⚡", title: "Download cepat", desc: "Ambil semua foto sekaligus dalam file ZIP." },
-              { icon: "🔒", title: "Privasi terjaga", desc: "Cookie hanya dipakai untuk fetch data, tidak disimpan." },
-            ].map((f) => (
-              <div key={f.title} className="p-4 rounded-xl bg-zinc-900/60 border border-zinc-800 space-y-2">
-                <span className="text-2xl">{f.icon}</span>
-                <h3 className="font-semibold text-zinc-200 text-sm">{f.title}</h3>
-                <p className="text-zinc-500 text-xs leading-relaxed">{f.desc}</p>
-              </div>
-            ))}
+        {/* Bookmarklet toggle when needed */}
+        {(needCookie || showBookmarklet) && !product && (
+          <div className="max-w-2xl mx-auto">
+            <button
+              onClick={() => setShowBookmarklet(!showBookmarklet)}
+              className="flex items-center gap-2 text-orange-400 text-sm hover:text-orange-300 transition-colors"
+            >
+              <BookMarked className="h-4 w-4" />
+              Lebih mudah: gunakan Bookmarklet
+              {showBookmarklet ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+            </button>
           </div>
         )}
+
+        {isLoading && <SkeletonGallery />}
+        {product && !isLoading && <ProductGallery product={product} />}
       </main>
 
       <footer className="border-t border-zinc-800/60 mt-20">
