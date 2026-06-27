@@ -8,7 +8,6 @@ export interface ShopeeProduct {
   images: string[];
   shopId: string;
   itemId: string;
-  description?: string;
   rating?: number;
   sold?: number;
 }
@@ -20,151 +19,167 @@ interface ShopeeApiResponse {
     price_min?: number;
     price_max?: number;
     images?: string[];
-    description?: string;
-    item_rating?: {
-      rating_star?: number;
-    };
+    item_rating?: { rating_star?: number };
     historical_sold?: number;
   };
   error?: number;
   error_msg?: string;
 }
 
-const SHOPEE_API_BASE = "https://shopee.co.id/api/v4";
+function randomUserAgent(): string {
+  const agents = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  ];
+  return agents[Math.floor(Math.random() * agents.length)];
+}
 
-function getRequestHeaders(shopId: string, itemId: string) {
+function buildHeaders(shopId: string, itemId: string, referer?: string) {
   return {
-    "User-Agent":
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "User-Agent": randomUserAgent(),
     Accept: "application/json, text/plain, */*",
     "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Accept-Encoding": "gzip, deflate, br",
-    Referer: `https://shopee.co.id/product/${shopId}/${itemId}`,
+    Referer: referer || `https://shopee.co.id/product/${shopId}/${itemId}`,
     Origin: "https://shopee.co.id",
-    "X-Requested-With": "XMLHttpRequest",
     "X-Api-Source": "pc",
     "X-Shopee-Language": "id",
-    "X-Csrftoken": "placeholder",
-    "cache-control": "no-cache",
-    pragma: "no-cache",
-    "sec-ch-ua": '"Chromium";v="125", "Not.A/Brand";v="24"',
-    "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-platform": '"Windows"',
+    "X-Requested-With": "XMLHttpRequest",
     "sec-fetch-dest": "empty",
     "sec-fetch-mode": "cors",
     "sec-fetch-site": "same-origin",
+    "Cache-Control": "no-cache",
   };
 }
 
-const API_ENDPOINTS = [
-  (shopId: string, itemId: string) =>
-    `${SHOPEE_API_BASE}/item/get?itemid=${itemId}&shopid=${shopId}`,
-  (shopId: string, itemId: string) =>
-    `https://shopee.co.id/api/v2/item/get?itemid=${itemId}&shopid=${shopId}`,
-];
+async function tryApiV4(shopId: string, itemId: string): Promise<ShopeeProduct | null> {
+  try {
+    const url = `https://shopee.co.id/api/v4/item/get?itemid=${itemId}&shopid=${shopId}`;
+    const res = await fetch(url, { headers: buildHeaders(shopId, itemId), cache: "no-store" });
+    if (!res.ok) return null;
+    const json: ShopeeApiResponse = await res.json();
+    if (!json.data || (json.error && json.error !== 0)) return null;
+    return parseApiResponse(json, shopId, itemId);
+  } catch { return null; }
+}
+
+async function tryApiV2(shopId: string, itemId: string): Promise<ShopeeProduct | null> {
+  try {
+    const url = `https://shopee.co.id/api/v2/item/get?itemid=${itemId}&shopid=${shopId}`;
+    const res = await fetch(url, { headers: buildHeaders(shopId, itemId), cache: "no-store" });
+    if (!res.ok) return null;
+    const json: ShopeeApiResponse = await res.json();
+    if (!json.data || (json.error && json.error !== 0)) return null;
+    return parseApiResponse(json, shopId, itemId);
+  } catch { return null; }
+}
+
+async function tryHtmlScrape(shopId: string, itemId: string, originalUrl?: string): Promise<ShopeeProduct | null> {
+  try {
+    const pageUrl = originalUrl || `https://shopee.co.id/product/${shopId}/${itemId}`;
+    const res = await fetch(pageUrl, {
+      headers: {
+        "User-Agent": randomUserAgent(),
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8",
+        "Cache-Control": "no-cache",
+      },
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+
+    const nextDataMatch = html.match(/<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/);
+    if (nextDataMatch) {
+      try {
+        const nextData = JSON.parse(nextDataMatch[1]);
+        const itemData =
+          nextData?.props?.pageProps?.initialData?.data?.productItem ||
+          nextData?.props?.pageProps?.product ||
+          nextData?.props?.pageProps?.initialState?.pdpReducer?.product;
+        if (itemData?.images?.length) {
+          return {
+            title: itemData.name || "Produk Shopee",
+            price: itemData.price ? formatPrice(itemData.price, "IDR") : "Harga tidak tersedia",
+            priceMin: "",
+            priceMax: "",
+            images: itemData.images.filter(Boolean).map((h: string) => buildFullImageUrl(h)),
+            shopId,
+            itemId,
+            rating: itemData.item_rating?.rating_star,
+            sold: itemData.historical_sold,
+          };
+        }
+      } catch { /* continue */ }
+    }
+
+    const imageSection = html.match(/"images"\s*:\s*\[(.*?)\]/s);
+    if (imageSection) {
+      const sectionImages: string[] = [];
+      for (const m of imageSection[1].matchAll(/["']([a-f0-9]{32})["']/g)) {
+        sectionImages.push(buildFullImageUrl(m[1]));
+      }
+      if (sectionImages.length > 0) {
+        const titleMatch = html.match(/"name"\s*:\s*"([^"]{5,200})"/);
+        const priceMatch = html.match(/"price"\s*:\s*(\d+)/);
+        return {
+          title: titleMatch ? titleMatch[1] : "Produk Shopee",
+          price: priceMatch ? formatPrice(parseInt(priceMatch[1]), "IDR") : "Harga tidak tersedia",
+          priceMin: "",
+          priceMax: "",
+          images: sectionImages,
+          shopId,
+          itemId,
+        };
+      }
+    }
+    return null;
+  } catch { return null; }
+}
+
+function parseApiResponse(json: ShopeeApiResponse, shopId: string, itemId: string): ShopeeProduct | null {
+  const data = json.data;
+  if (!data) return null;
+  const images = (data.images || []).filter(Boolean).map((h: string) => buildFullImageUrl(h));
+  if (images.length === 0) return null;
+  const currency = "IDR";
+  const price = data.price
+    ? formatPrice(data.price, currency)
+    : data.price_min
+    ? `${formatPrice(data.price_min, currency)} – ${formatPrice(data.price_max || data.price_min, currency)}`
+    : "Harga tidak tersedia";
+  return {
+    title: data.name || "Produk Shopee",
+    price,
+    priceMin: data.price_min ? formatPrice(data.price_min, currency) : "",
+    priceMax: data.price_max ? formatPrice(data.price_max, currency) : "",
+    images,
+    shopId,
+    itemId,
+    rating: data.item_rating?.rating_star,
+    sold: data.historical_sold,
+  };
+}
 
 export async function fetchShopeeProduct(
   shopId: string,
-  itemId: string
+  itemId: string,
+  originalUrl?: string
 ): Promise<ShopeeProduct> {
-  let lastError: Error = new Error("Gagal mengambil data produk.");
+  const results = await Promise.allSettled([
+    tryApiV4(shopId, itemId),
+    tryApiV2(shopId, itemId),
+    tryHtmlScrape(shopId, itemId, originalUrl),
+  ]);
 
-  for (const endpointFn of API_ENDPOINTS) {
-    const url = endpointFn(shopId, itemId);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
-
-    try {
-      const response = await fetch(url, {
-        headers: getRequestHeaders(shopId, itemId),
-        signal: controller.signal,
-        cache: "no-store",
-      });
-
-      clearTimeout(timeout);
-
-      if (response.status === 403) {
-        lastError = new Error(
-          "Shopee memblokir permintaan. Coba deploy ke Vercel atau tunggu beberapa menit."
-        );
-        continue;
-      }
-
-      if (response.status === 404) {
-        throw new Error("Produk tidak ditemukan atau sudah dihapus.");
-      }
-
-      if (!response.ok) {
-        lastError = new Error(`Server Shopee error: ${response.status}`);
-        continue;
-      }
-
-      const json: ShopeeApiResponse = await response.json();
-
-      if (json.error && json.error !== 0) {
-        if (json.error === 4) {
-          throw new Error("Produk tidak ditemukan atau sudah tidak tersedia.");
-        }
-        lastError = new Error(json.error_msg || `Shopee API error: ${json.error}`);
-        continue;
-      }
-
-      const data = json.data;
-      if (!data) {
-        lastError = new Error("Data produk kosong. Coba link produk lain.");
-        continue;
-      }
-
-      const rawImages = data.images || [];
-      const images = rawImages
-        .filter(Boolean)
-        .map((hash: string) => buildFullImageUrl(hash));
-
-      if (images.length === 0) {
-        throw new Error("Tidak ada gambar ditemukan untuk produk ini.");
-      }
-
-      const currency = "IDR";
-      const price = data.price
-        ? formatPrice(data.price, currency)
-        : data.price_min
-        ? `${formatPrice(data.price_min, currency)} - ${formatPrice(
-            data.price_max || data.price_min,
-            currency
-          )}`
-        : "Harga tidak tersedia";
-
-      return {
-        title: data.name || "Produk Shopee",
-        price,
-        priceMin: data.price_min ? formatPrice(data.price_min, currency) : "",
-        priceMax: data.price_max ? formatPrice(data.price_max, currency) : "",
-        images,
-        shopId,
-        itemId,
-        description: data.description,
-        rating: data.item_rating?.rating_star,
-        sold: data.historical_sold,
-      };
-    } catch (error) {
-      clearTimeout(timeout);
-      if (error instanceof Error) {
-        if (error.name === "AbortError") {
-          lastError = new Error("Timeout: Shopee tidak merespons.");
-          continue;
-        }
-        if (
-          error.message.includes("tidak ditemukan") ||
-          error.message.includes("dihapus") ||
-          error.message.includes("tidak tersedia") ||
-          error.message.includes("gambar")
-        ) {
-          throw error;
-        }
-        lastError = error;
-      }
+  for (const result of results) {
+    if (result.status === "fulfilled" && result.value && result.value.images.length > 0) {
+      return result.value;
     }
   }
 
-  throw lastError;
+  throw new Error(
+    "Tidak dapat mengambil data produk. Shopee membatasi akses saat ini — coba lagi dalam beberapa menit."
+  );
 }
